@@ -402,25 +402,59 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
   let attributesToTranslate = [];
 
   let translateNewNodesTimerHandler;
-  let newNodes = [];
-  let removedNodes = [];
+  const translateNewNodesInterval = 2000;
+  const maxPendingNewNodes = 250;
+  const newNodes = new Set();
+  let removedNodes = new WeakSet();
 
   let nodesToRestore = [];
 
+  function nodeIsConnected(node) {
+    return Boolean(
+      node && (node.isConnected || document.documentElement.contains(node))
+    );
+  }
+
+  function cleanupDisconnectedPieces() {
+    piecesToTranslate = piecesToTranslate.filter((ptt) =>
+      ptt.nodes.some((node) => nodeIsConnected(node))
+    );
+  }
+
+  function cleanupDisconnectedRestorationRecords() {
+    nodesToRestore = nodesToRestore.filter((ntr) =>
+      nodeIsConnected(ntr.node) || nodeIsConnected(ntr.original)
+    );
+    attributesToTranslate = attributesToTranslate.filter((ati) =>
+      nodeIsConnected(ati.node)
+    );
+  }
+
+  function cleanupDisconnectedTranslationState() {
+    cleanupDisconnectedPieces();
+    cleanupDisconnectedRestorationRecords();
+  }
+
   function translateNewNodes() {
+    if (newNodes.size === 0) return;
+
     try {
+      cleanupDisconnectedTranslationState();
       newNodes.forEach((nn) => {
-        if (removedNodes.indexOf(nn) != -1) return;
+        if (removedNodes.has(nn) || !nodeIsConnected(nn)) return;
 
         let newPiecesToTranslate = getPiecesToTranslate(nn);
 
         for (const i in newPiecesToTranslate) {
-          const newNodes = newPiecesToTranslate[i].nodes;
+          const candidateNodes = newPiecesToTranslate[i].nodes;
           let finded = false;
 
           for (const ntt of piecesToTranslate) {
-            if (ntt.nodes.some((n1) => newNodes.some((n2) => n1 === n2))) {
+            if (
+              ntt.nodes.some((n1) => candidateNodes.some((n2) => n1 === n2))
+            ) {
               finded = true;
+              break;
             }
           }
 
@@ -432,8 +466,8 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
     } catch (e) {
       console.error(e);
     } finally {
-      newNodes = [];
-      removedNodes = [];
+      newNodes.clear();
+      removedNodes = new WeakSet();
     }
   }
 
@@ -453,13 +487,13 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
       });
 
       mutation.removedNodes.forEach((removedNode) => {
-        removedNodes.push(removedNode);
+        removedNodes.add(removedNode);
       });
     });
 
     piecesToTranslate.forEach((ptt) => {
-      if (newNodes.indexOf(ptt) == -1) {
-        newNodes.push(ptt);
+      if (newNodes.size < maxPendingNewNodes) {
+        newNodes.add(ptt);
       }
     });
   });
@@ -468,7 +502,10 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
     disableMutatinObserver();
 
     if (twpConfig.get("translateDynamicallyCreatedContent") == "yes") {
-      translateNewNodesTimerHandler = setInterval(translateNewNodes, 2000);
+      translateNewNodesTimerHandler = setInterval(
+        translateNewNodes,
+        translateNewNodesInterval
+      );
       mutationObserver.observe(document.body, {
         childList: true,
         subtree: true,
@@ -478,8 +515,8 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
 
   function disableMutatinObserver() {
     clearInterval(translateNewNodesTimerHandler);
-    newNodes = [];
-    removedNodes = [];
+    newNodes.clear();
+    removedNodes = new WeakSet();
     mutationObserver.disconnect();
     mutationObserver.takeRecords();
   }
@@ -904,6 +941,13 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
               currentSourceLanguage,
               currentTargetLanguage
             ).then((results) => {
+              if (
+                pageLanguageState !== "translated" ||
+                !nodesToRestore.includes(toRestore) ||
+                !nodeIsConnected(nodes[j])
+              ) {
+                return;
+              }
               // results = `${originalText.match(/^\s*/)[0]}${results.trim()}${
               //   originalText.match(/\s*$/)[0]
               // }`;
@@ -944,6 +988,13 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
               currentSourceLanguage,
               currentTargetLanguage
             ).then((results) => {
+              if (
+                pageLanguageState !== "translated" ||
+                !nodesToRestore.includes(toRestore) ||
+                !nodeIsConnected(nodes[j])
+              ) {
+                return;
+              }
               // results = `${originalText.match(/^\s*/)[0]}${results.trim()}${
               //   originalText.match(/\s*$/)[0]
               // }`;
@@ -967,6 +1018,7 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
   function translationRoutine() {
     try {
       if (piecesToTranslate && pageIsVisible) {
+        cleanupDisconnectedTranslationState();
         (function () {
           if (piecesToTranslate.length < 1) return;
           const innerHeight = window.innerHeight;
@@ -1078,10 +1130,12 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
     }
 
     clearTimeout(translationRoutine_handler);
-    translationRoutine_handler = setTimeout(translationRoutine, 300);
+    translationRoutine_handler = null;
+    if (pageLanguageState === "translated") {
+      translationRoutine_handler = setTimeout(translationRoutine, 300);
+    }
   }
 
-  translationRoutine();
 
   function translatePageTitle() {
     const title = document.querySelector("title");
@@ -1128,6 +1182,8 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
       currentTargetLanguage = targetLanguage;
     }
 
+    currentIndex = undefined;
+    compressionMap = undefined;
     customDictionary = sortDictionary(twpConfig.get("customDictionary"));
 
     // https://github.com/FilipePS/Traduzir-paginas-web/issues/619
@@ -1169,6 +1225,8 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
   pageTranslator.restorePage = function () {
     fooCount++;
     piecesToTranslate = [];
+    clearTimeout(translationRoutine_handler);
+    translationRoutine_handler = null;
 
     showOriginal.disable();
     disableMutatinObserver();
@@ -1192,6 +1250,9 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
     originalPageTitle = null;
 
     for (const ntr of nodesToRestore) {
+      if (!nodeIsConnected(ntr.node) && !nodeIsConnected(ntr.original)) {
+        continue;
+      }
       if (ntr.node === ntr.original) {
         if (ntr.node.textContent === ntr.translatedText) {
           ntr.node.textContent = ntr.originalText;
@@ -1204,9 +1265,14 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
       }
     }
     nodesToRestore = [];
+    currentIndex = undefined;
+    compressionMap = undefined;
 
     //TODO não restaurar atributos que foram modificados
     for (const ati of attributesToTranslate) {
+      if (!nodeIsConnected(ati.node)) {
+        continue;
+      }
       if (ati.isTranslated) {
         ati.node.setAttribute(ati.attrName, ati.original);
       }
