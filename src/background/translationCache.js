@@ -2,6 +2,8 @@
 
 const translationCache = (function () {
   const translationCache = {};
+  const maxMemoryCacheEntries = 1000;
+  const maxOpenTranslationCaches = 6;
 
   /**
    * @typedef {Object} CacheEntry
@@ -213,12 +215,31 @@ const translationCache = (function () {
       const hash = await Utils.stringToSHA1String(originalText);
 
       let translation = this.cache.get(hash);
-      if (translation) return translation;
+      if (translation) {
+        this.cache.delete(hash);
+        this.cache.set(hash, translation);
+        return translation;
+      }
 
       translation = await this.#queryInDB(hash);
-      if (translation) this.cache.set(hash, translation);
+      if (translation) this.#setInMemoryCache(hash, translation);
 
       return translation;
+    }
+
+    /**
+     * Store an entry in the in-memory LRU cache.
+     * @param {string} hash
+     * @param {CacheEntry} translation
+     */
+    #setInMemoryCache(hash, translation) {
+      if (this.cache.has(hash)) this.cache.delete(hash);
+      this.cache.set(hash, translation);
+
+      while (this.cache.size > maxMemoryCacheEntries) {
+        const oldestKey = this.cache.keys().next().value;
+        this.cache.delete(oldestKey);
+      }
     }
 
     /**
@@ -256,12 +277,14 @@ const translationCache = (function () {
      */
     async add(originalText, translatedText, detectedLanguage = "und") {
       const hash = await Utils.stringToSHA1String(originalText);
-      return await this.#addInDb({
+      const data = {
         originalText,
         translatedText,
         detectedLanguage,
         key: hash,
-      });
+      };
+      this.#setInMemoryCache(hash, data);
+      return await this.#addInDb(data);
     }
 
     /**
@@ -486,6 +509,8 @@ const translationCache = (function () {
       );
       const cache = this.list.get(dbName);
       if (cache) {
+        this.list.delete(dbName);
+        this.list.set(dbName, cache);
         await cache.promiseStartingCache;
         return cache;
       } else {
@@ -511,9 +536,23 @@ const translationCache = (function () {
         targetLanguage
       );
       this.list.set(dbName, cache);
+      this.#closeOldCaches();
       try {
         this.#addCacheList(dbName);
       } catch {}
+    }
+
+    /**
+     * Close old in-memory cache objects and IndexedDB handles, keeping the
+     * persistent cache data available on disk for future lookups.
+     */
+    #closeOldCaches() {
+      while (this.list.size > maxOpenTranslationCaches) {
+        const oldestKey = this.list.keys().next().value;
+        const oldestCache = this.list.get(oldestKey);
+        if (oldestCache) oldestCache.close();
+        this.list.delete(oldestKey);
+      }
     }
 
     /**
