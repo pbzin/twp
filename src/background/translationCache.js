@@ -324,7 +324,6 @@ const translationCache = (function () {
         const request = indexedDB.open(name, version);
 
         request.onsuccess = (event) => {
-          console.info(request.result);
           resolve(request.result);
         };
 
@@ -619,7 +618,6 @@ const translationCache = (function () {
         const DBDeleteRequest = indexedDB.deleteDatabase(dbName);
 
         DBDeleteRequest.onsuccess = () => {
-          console.info("Database deleted successfully");
           resolve(true);
         };
 

@@ -1500,7 +1500,6 @@ twpConfig
           translateServer,
           ttsServer,
         };
-        console.info("proxyServers: ", proxyServers);
         twpConfig.set("proxyServers", proxyServers);
 
         $("#googleTranslateProxyServer").value = translateServer;

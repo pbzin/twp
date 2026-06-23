@@ -2,6 +2,8 @@
 
 const textToSpeech = (function () {
   const textToSpeech = {};
+  const maxCachedAudios = 80;
+  const requestTimeout = 30000;
 
   class BingHelper {
     /** @type {number} */
@@ -62,6 +64,7 @@ const textToSpeech = (function () {
 
           const http = new XMLHttpRequest();
           http.open("GET", "https://www.bing.com/translator");
+          http.timeout = requestTimeout;
           http.send();
           http.onload = (e) => {
             try {
@@ -277,6 +280,26 @@ const textToSpeech = (function () {
     }
 
     /**
+     * Disconnect and forget the media source for an audio element that has
+     * been evicted from the TTS cache.
+     * @param {HTMLAudioElement} audio
+     */
+    release(audio) {
+      const index = this.sources.findIndex(
+        (source) => source.mediaElement === audio
+      );
+      if (index === -1) return;
+
+      const source = this.sources[index];
+      try {
+        source.disconnect();
+      } catch (e) {
+        console.error(e);
+      }
+      this.sources.splice(index, 1);
+    }
+
+    /**
      * Set the volume of the amplifier.
      * @param {number} volume
      */
@@ -328,6 +351,37 @@ const textToSpeech = (function () {
       this.audioSpeed = 1.0;
 
       this.audioAmplifier = new AudioAmplifier();
+    }
+
+    /**
+     * Store an audio element with LRU eviction to avoid holding every spoken
+     * text in memory for the lifetime of the extension.
+     * @param {string} audioKey
+     * @param {HTMLAudioElement} audio
+     */
+    setCachedAudio(audioKey, audio) {
+      if (this.audios.has(audioKey)) this.audios.delete(audioKey);
+      this.audios.set(audioKey, audio);
+      audio.playbackRate = this.audioSpeed;
+
+      while (this.audios.size > maxCachedAudios) {
+        const oldestKey = this.audios.keys().next().value;
+        const oldestAudio = this.audios.get(oldestKey);
+        this.disposeAudio(oldestAudio);
+        this.audios.delete(oldestKey);
+      }
+    }
+
+    /**
+     * Release an audio element and its Web Audio source node.
+     * @param {HTMLAudioElement} audio
+     */
+    disposeAudio(audio) {
+      if (!audio) return;
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      this.audioAmplifier.release(audio);
     }
 
     /**
@@ -403,6 +457,7 @@ const textToSpeech = (function () {
           this.baseURL + this.cbGetExtraParameters(text, targetLanguage)
         );
         xhr.responseType = "blob";
+        xhr.timeout = requestTimeout;
         if (this.cbGetRequestBody) {
           xhr.setRequestHeader(
             "Content-Type",
@@ -431,13 +486,17 @@ const textToSpeech = (function () {
 
       for (const requestText of requests) {
         const audioKey = [targetLanguage, requestText].join(", ");
-        if (!this.audios.get(audioKey)) {
+        const cachedAudio = this.audios.get(audioKey);
+        if (cachedAudio) {
+          this.audios.delete(audioKey);
+          this.audios.set(audioKey, cachedAudio);
+        } else {
           promises.push(
             this.makeRequest(requestText, targetLanguage)
               .then(
                 /** @type {string} */ (response) => {
                   const audio = new Audio(response);
-                  this.audios.set(audioKey, audio);
+                  this.setCachedAudio(audioKey, audio);
                   return response;
                 }
               )

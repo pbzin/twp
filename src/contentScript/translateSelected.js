@@ -171,6 +171,8 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
 
   let onCSSLoad = null;
   let isCSSLoaded = false;
+  let translateNewInputTimerHandler = null;
+  let unsubscribePanelConfigChanges = null;
 
   function init() {
     destroy();
@@ -480,7 +482,6 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
       }
     };
 
-    let translateNewInputTimerHandler;
     eOrigText.oninput = () => {
       clearTimeout(translateNewInputTimerHandler);
       translateNewInputTimerHandler = setTimeout(translateNewInput, 600);
@@ -723,7 +724,8 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
       eMoreOrLess.setAttribute("title", twpI18n.getMessage("more"));
     }
 
-    twpConfig.onChanged((name, newvalue) => {
+    if (unsubscribePanelConfigChanges) unsubscribePanelConfigChanges();
+    unsubscribePanelConfigChanges = twpConfig.onChanged((name, newvalue) => {
       switch (name) {
         case "enabledServices": {
           const enabledServices = newvalue;
@@ -787,6 +789,13 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
     window.isTranslatingSelected = false;
     fooCount++;
     stopAudio();
+    clearTimeout(translateNewInputTimerHandler);
+    translateNewInputTimerHandler = null;
+    onCSSLoad = null;
+    if (unsubscribePanelConfigChanges) {
+      unsubscribePanelConfigChanges();
+      unsubscribePanelConfigChanges = null;
+    }
     if (!divElement) return;
 
     eButtonTransSelText.removeEventListener("click", onClick);

@@ -148,7 +148,6 @@ void (function () {
     setTimeout(() => {
       translate(text, targetLanguage || "en")
         .then((result) => {
-          console.info(result);
           chrome.runtime.sendMessage(
             {
               action: "DeepL_firstTranslationResult",
@@ -172,10 +171,8 @@ void (function () {
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "translateTextWithDeepL") {
-      console.info(request);
       translate(request.text, request.targetLanguage)
         .then((result) => {
-          console.info(result);
           sendResponse(result);
         })
         .catch((e) => {

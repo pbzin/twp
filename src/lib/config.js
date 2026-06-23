@@ -208,9 +208,14 @@ const twpConfig = (function () {
   /**
    * create a listener to run when a config changes
    * @param {function} callback
+   * @returns {function} unsubscribe function
    */
   twpConfig.onChanged = function (callback) {
     observers.push(callback);
+    return function unsubscribe() {
+      const index = observers.indexOf(callback);
+      if (index !== -1) observers.splice(index, 1);
+    };
   };
 
   // listen to storage changes

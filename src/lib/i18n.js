@@ -3,6 +3,62 @@
 const twpI18n = (function () {
   const twpI18n = {};
   let messages = null;
+  let fallbackMessages = null;
+
+  function normalizeMessages(result) {
+    return Object.keys(result).map((key) => ({
+      name: key.toLowerCase(),
+      message: result[key].message,
+      placeholders: result[key].placeholders,
+    }));
+  }
+
+  function getLoadedMessage(messageList, messageName, substitutions = null) {
+    if (!messageList) return "";
+
+    const message = messageList.find(
+      (m) => m.name === messageName.toLowerCase()
+    );
+    if (!message) return "";
+
+    let finalMessage = message.message;
+    if (message.placeholders) {
+      for (const [key, value] of Object.entries(message.placeholders)) {
+        let content = value.content;
+        const match = content.match(/\$([1-9][0-9]*)/);
+        const index = match ? parseInt(match[1]) : null;
+        if (index) {
+          if (substitutions instanceof Array) {
+            content = content.replaceAll(
+              "$" + index,
+              String(substitutions[index - 1])
+            );
+          } else if (index === 1) {
+            content = content.replaceAll("$" + index, String(substitutions));
+          } else {
+            content = content.replaceAll("$" + index, "");
+          }
+        }
+        finalMessage = finalMessage.replaceAll("$" + key + "$", content);
+      }
+    }
+
+    return finalMessage;
+  }
+
+  async function loadMessages(uiLanguage) {
+    for (const basePath of ["_locales", "locales"]) {
+      try {
+        const response = await fetch(
+          chrome.runtime.getURL(`/${basePath}/${uiLanguage}/messages.json`)
+        );
+        if (response.ok) return normalizeMessages(await response.json());
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+    throw new Error(`Unable to load messages for ${uiLanguage}`);
+  }
 
   /**
    * Gets the localized string for the specified message
@@ -18,45 +74,24 @@ const twpI18n = (function () {
   twpI18n.getMessage = function (messageName, substitutions = null) {
     try {
       if (messages) {
-        messageName = messageName.toLowerCase();
-        const message = messages.find((m) => m.name === messageName);
-        if (!message) return chrome.i18n.getMessage(messageName, substitutions);
-
-        /** @type {string} */
-        let finalMessage = message.message;
-
-        if (message.placeholders) {
-          for (const [key, value] of Object.entries(message.placeholders)) {
-            /** @type {string} */
-            let content = value.content;
-            let match = content.match(/\$([1-9][0-9]*)/);
-            let index = match ? parseInt(match[1]) : null;
-            if (index) {
-              if (substitutions instanceof Array) {
-                content = content.replaceAll(
-                  "$" + index,
-                  String(substitutions[index - 1])
-                );
-              } else if (index === 1) {
-                content = content.replaceAll(
-                  "$" + index,
-                  String(substitutions)
-                );
-              } else {
-                content = content.replaceAll("$" + index, "");
-              }
-            }
-            finalMessage = finalMessage.replaceAll("$" + key + "$", content);
-          }
-        }
-
-        return finalMessage;
+        return (
+          getLoadedMessage(messages, messageName, substitutions) ||
+          getLoadedMessage(fallbackMessages, messageName, substitutions) ||
+          chrome.i18n.getMessage(messageName, substitutions) ||
+          messageName
+        );
       } else {
-        return chrome.i18n.getMessage(messageName, substitutions);
+        return (
+          getLoadedMessage(fallbackMessages, messageName, substitutions) ||
+          chrome.i18n.getMessage(messageName, substitutions) ||
+          messageName
+        );
       }
     } catch (e) {
-      console.log(e);
-      return chrome.i18n.getMessage(messageName, substitutions);
+      return (
+        getLoadedMessage(fallbackMessages, messageName, substitutions) ||
+        messageName
+      );
     }
   };
 
@@ -112,17 +147,8 @@ const twpI18n = (function () {
     if (uiLanguage === "default") {
       messages = null;
     } else {
-      return await fetch(
-        chrome.runtime.getURL(`/_locales/${uiLanguage}/messages.json`)
-      )
-        .then((response) => response.json())
-        .then((result) => {
-          messages = Object.keys(result).map((key) => ({
-            name: key.toLowerCase(),
-            message: result[key].message,
-            placeholders: result[key].placeholders,
-          }));
-        })
+      return await loadMessages(uiLanguage)
+        .then((result) => (messages = result))
         .catch((e) => {
           messages = null;
           console.warn(e);
@@ -130,8 +156,12 @@ const twpI18n = (function () {
     }
   };
 
-  twpConfig.onReady(function () {
-    twpI18n.updateUiMessages();
+  twpConfig.onReady(async function () {
+    fallbackMessages = await loadMessages("en").catch((e) => {
+      console.warn(e);
+      return null;
+    });
+    await twpI18n.updateUiMessages();
 
     twpConfig.onChanged(function (name, newValue) {
       if (name === "uiLanguage") {

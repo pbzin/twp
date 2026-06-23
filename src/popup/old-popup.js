@@ -60,7 +60,6 @@ twpConfig
     );
 
     cbShowTranslateSelectedButton.oninput = (e) => {
-      console.log(e.target.checked);
       twpConfig.set(
         "showTranslateSelectedButton",
         e.target.checked ? "yes" : "no"

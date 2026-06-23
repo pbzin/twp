@@ -2,6 +2,8 @@
 
 const translationService = (function () {
   const translationService = {};
+  const requestTimeout = 30000;
+  const maxMemoryTranslationEntries = 1000;
 
   class Utils {
     /**
@@ -217,13 +219,13 @@ const translationService = (function () {
             "GET",
             "https://translate.googleapis.com/_/translate_http/_/js/k=translate_http.tr.en_US.YusFYy3P_ro.O/am=AAg/d=1/exm=el_conf/ed=1/rs=AN8SPfq1Hb8iJRleQqQc8zhdzXmF9E56eQ/m=el_main"
           );
+          http.timeout = requestTimeout;
           http.send();
           http.onload = (e) => {
             if (http.responseText && http.responseText.length > 1) {
               const result = http.responseText.match(
                 /['"]x\-goog\-api\-key['"]\s*\:\s*['"](\w{39})['"]/i
               );
-              console.log(result);
               if (result && result.length === 2) {
                 GoogleHelper_v2.#translateAuth = result[1];
                 GoogleHelper_v2.#AuthNotFound = false;
@@ -304,6 +306,7 @@ const translationService = (function () {
             "GET",
             "https://translate.yandex.net/website-widget/v1/widget.js?widgetId=ytWidget&pageLang=es&widgetTheme=light&autoMode=false"
           );
+          http.timeout = requestTimeout;
           http.send();
           http.onload = (e) => {
             const result = http.responseText.match(/sid\:\s\'[0-9a-f\.]+/);
@@ -379,6 +382,7 @@ const translationService = (function () {
 
           const http = new XMLHttpRequest();
           http.open("GET", "https://edge.microsoft.com/translate/auth");
+          http.timeout = requestTimeout;
           http.send();
           http.onload = (e) => {
             if (http.responseText && http.responseText.length > 1) {
@@ -508,6 +512,19 @@ const translationService = (function () {
       this.translationsInProgress = new Map();
     }
 
+    pruneTranslationsInProgress() {
+      this.translationsInProgress.forEach((transInfo, key) => {
+        if (transInfo.status === "error") {
+          this.translationsInProgress.delete(key);
+        }
+      });
+
+      while (this.translationsInProgress.size > maxMemoryTranslationEntries) {
+        const oldestKey = this.translationsInProgress.keys().next().value;
+        this.translationsInProgress.delete(oldestKey);
+      }
+    }
+
     /**
      * Removes all translations with `status` **error** and are in `translationsInProgress`.
      *
@@ -557,6 +574,8 @@ const translationService = (function () {
 
         const progressInfo = this.translationsInProgress.get(requestHash);
         if (progressInfo) {
+          this.translationsInProgress.delete(requestHash);
+          this.translationsInProgress.set(requestHash, progressInfo);
           currentTranslationsInProgress.push(progressInfo);
         } else {
           /** @type {TranslationStatus} */
@@ -566,6 +585,7 @@ const translationService = (function () {
 
           /** @type {TranslationInfo} */
           const progressInfo = {
+            requestHash,
             originalText: requestString,
             translatedText: null,
             detectedLanguage: null,
@@ -581,6 +601,7 @@ const translationService = (function () {
 
           currentTranslationsInProgress.push(progressInfo);
           this.translationsInProgress.set(requestHash, progressInfo);
+          this.pruneTranslationsInProgress();
 
           //cast
           const cacheEntry = await translationCache.get(
@@ -593,7 +614,6 @@ const translationService = (function () {
             progressInfo.translatedText = cacheEntry.translatedText;
             progressInfo.detectedLanguage = cacheEntry.detectedLanguage;
             progressInfo.status = "complete";
-            //this.translationsInProgress.delete([sourceLanguage, targetLanguage, requestString])
           } else {
             currentRequest.push(progressInfo);
             currentSize += progressInfo.originalText.length;
@@ -645,6 +665,7 @@ const translationService = (function () {
         }
 
         xhr.responseType = "json";
+        xhr.timeout = requestTimeout;
 
         xhr.onload = (event) => {
           resolve(xhr.response);
@@ -706,6 +727,7 @@ const translationService = (function () {
                 transInfo.detectedLanguage = result.detectedLanguage || "und";
                 transInfo.translatedText = result.text;
                 transInfo.status = "complete";
+                this.pruneTranslationsInProgress();
 
                 if (
                   dontSaveInPersistentCache === false &&
@@ -726,8 +748,8 @@ const translationService = (function () {
               console.error(e);
               for (const transInfo of request) {
                 transInfo.status = "error";
-                //this.translationsInProgress.delete([sourceLanguage, targetLanguage, transInfo.originalText])
               }
+              this.pruneTranslationsInProgress();
             })
         );
       }
@@ -783,6 +805,10 @@ const translationService = (function () {
           //     ) => ({ text: value[0], detectedLanguage: value[1] })
           //   );
           // }
+          if (!response || !Array.isArray(response[0])) {
+            throw new Error("Invalid Google Translate response");
+          }
+
           responseJson = response[0].map(
             /** @returns {Service_Single_Result_Response} */ (
               /** @type {string} */ value,
@@ -961,7 +987,7 @@ const translationService = (function () {
           return [
             {
               name: "Content-Type",
-              value: "application/application/json+protobuf",
+              value: "application/json+protobuf",
             },
             {
               name: "X-goog-api-key",

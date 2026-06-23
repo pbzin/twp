@@ -522,8 +522,8 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
     }
 
     function disableDarkMode() {
-      if (shadowRoot.getElementById("#darkModeElement")) {
-        shadowRoot.getElementById("#darkModeElement").remove();
+      if (shadowRoot.getElementById("darkModeElement")) {
+        shadowRoot.getElementById("darkModeElement").remove();
         shadowRoot.querySelector("#listen svg").style = "fill: black";
       }
     }
